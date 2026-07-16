@@ -40,6 +40,7 @@ from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE, MSO_CONNECTOR
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+from pptx.enum.dml import MSO_LINE_DASH_STYLE
 
 LEVEL_COLORS = ["0C3649", "347490", "4396BB", "70AFCC"]
 LINE_GRAY = "9AA5AB"
@@ -61,9 +62,9 @@ FONT = "Arial"
 
 class Emp:
     __slots__ = ("name", "title", "dept", "reports_to", "children", "level",
-                 "x", "y", "subtree_w", "subtree_h")
+                 "x", "y", "subtree_w", "subtree_h", "linkedin")
 
-    def __init__(self, name, title, dept, reports_to):
+    def __init__(self, name, title, dept, reports_to, linkedin=None):
         self.name = name
         self.title = title
         self.dept = dept
@@ -74,10 +75,23 @@ class Emp:
         self.y = 0.0
         self.subtree_w = NODE_W
         self.subtree_h = NODE_H
+        self.linkedin = linkedin
 
 
 REQUIRED_COLS = ("Name", "ReportsToName")
-OPTIONAL_COLS = ("Designation", "Department")
+OPTIONAL_COLS = ("Designation", "Department", "LinkedinUrl")
+
+
+def _clean_url(value):
+    """Returns a usable URL string, or None for blanks/placeholders like 'NA'."""
+    if not value:
+        return None
+    v = str(value).strip()
+    if not v or v.upper() in ("NA", "N/A", "-", "NONE"):
+        return None
+    if not v.lower().startswith(("http://", "https://")):
+        v = "https://" + v
+    return v
 
 
 def read_department(ws):
@@ -99,7 +113,8 @@ def read_department(ws):
         dept = (row[col["Department"]] if "Department" in col else "") or ""
         reports_to = row[col["ReportsToName"]]
         reports_to = str(reports_to).strip() if reports_to and str(reports_to).strip() else None
-        emps.append(Emp(str(name).strip(), str(title).strip(), str(dept).strip(), reports_to))
+        linkedin = _clean_url(row[col["LinkedinUrl"]]) if "LinkedinUrl" in col else None
+        emps.append(Emp(str(name).strip(), str(title).strip(), str(dept).strip(), reports_to, linkedin))
 
     by_name = {}
     for e in emps:
@@ -144,11 +159,18 @@ def layout(e, start_x, y):
         e.x = start_x
         return
     cx = start_x
+    first_slot = start_x
+    last_slot = start_x
     for c in e.children:
+        last_slot = cx
         layout(c, cx, y + NODE_H + VGAP)
         cx += c.subtree_w + HGAP
-    left = e.children[0].x
-    right = e.children[-1].x + e.children[-1].subtree_w
+    # Center over the full bounding box of children's subtrees (their
+    # allotted slots), NOT over children's own box positions -- a non-leaf
+    # child's box is centered over *its* children and is generally not at
+    # the left edge of its own subtree, so using child.x here would drift.
+    left = first_slot
+    right = last_slot + e.children[-1].subtree_w
     e.x = (left + right) / 2 - NODE_W / 2
 
 
@@ -229,12 +251,15 @@ def layout_block(root, children_subset, x, root_y=0.0):
     rather than stored on the object, which would get clobbered by later
     blocks reusing the same root)."""
     cx = x
+    first_slot = x
+    last_slot = x
     for c in children_subset:
+        last_slot = cx
         layout(c, cx, root_y + NODE_H + VGAP)
         cx += c.subtree_w + HGAP
     if children_subset:
-        left = children_subset[0].x
-        right = children_subset[-1].x + children_subset[-1].subtree_w
+        left = first_slot
+        right = last_slot + children_subset[-1].subtree_w
         root_x = (left + right) / 2 - NODE_W / 2
     else:
         root_x = x
@@ -277,6 +302,9 @@ def add_box(slide, x, y, w, h, e, scale=1.0):
     p1.alignment = PP_ALIGN.CENTER
     r1 = p1.add_run()
     set_run(r1, e.name, name_size, True, border_color)
+    if e.linkedin:
+        r1.hyperlink.address = e.linkedin
+        r1.font.underline = True
 
     subtitle = e.title
     if e.dept and e.dept.lower() not in (e.title or "").lower():
@@ -311,31 +339,65 @@ def _draw_connectors_at(slide, e, ox, oy, scale):
     pbottom = oy + (e.y + NODE_H) * scale
     bus_y = oy + (e.y + NODE_H + VGAP / 2) * scale
     add_line(slide, px, pbottom, px, bus_y)
-    first_cx = ox + (e.children[0].x + NODE_W / 2) * scale
-    last_cx = ox + (e.children[-1].x + NODE_W / 2) * scale
-    if len(e.children) > 1:
-        add_line(slide, first_cx, bus_y, last_cx, bus_y)
-    for c in e.children:
-        ccx = ox + (c.x + NODE_W / 2) * scale
+    child_centers = [ox + (c.x + NODE_W / 2) * scale for c in e.children]
+    # The bus line must span the parent's own drop point too, not just
+    # first-to-last child: a child's box isn't necessarily centered under
+    # its own subtree, so the parent's x and a lone/off-center child's x
+    # can differ even when there's only one child.
+    left_x = min(child_centers + [px])
+    right_x = max(child_centers + [px])
+    if left_x != right_x:
+        add_line(slide, left_x, bus_y, right_x, bus_y)
+    for c, ccx in zip(e.children, child_centers):
         ctop = oy + c.y * scale
         add_line(slide, ccx, bus_y, ccx, ctop)
         _draw_connectors_at(slide, c, ox, oy, scale)
 
 
+def add_continuation_tag(slide, x, y, w, manager_name, scale):
+    """Small caption + dashed stub shown above a box when that box's root
+    is a continuation of someone who reports to a manager not shown on
+    this slide (e.g. their own subtree was too large to fit alongside
+    their manager, so they were promoted to their own block)."""
+    tag_h = 0.22
+    tag_y = max(0.05, y - tag_h - 0.03)
+
+    stub = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT,
+                                       Inches(x + w / 2), Inches(tag_y + tag_h),
+                                       Inches(x + w / 2), Inches(y))
+    stub.line.color.rgb = RGBColor.from_string(LINE_GRAY)
+    stub.line.width = Pt(1.0)
+    stub.line.dash_style = MSO_LINE_DASH_STYLE.DASH
+
+    tb = slide.shapes.add_textbox(Inches(x - 0.6), Inches(tag_y), Inches(w + 1.2), Inches(tag_h))
+    tf = tb.text_frame
+    tf.word_wrap = False
+    p = tf.paragraphs[0]
+    p.alignment = PP_ALIGN.CENTER
+    r = p.add_run()
+    set_run(r, f"continued \u2014 reports to {manager_name}", max(6.5, 7.5 * scale), False, GRAY_TEXT)
+    for run in p.runs:
+        run.font.italic = True
+
+
 def draw_block_at(slide, root, children_subset, root_x, root_y, ox, oy, scale):
     """Draw a block using positions already computed by layout_block, transformed by (ox, oy, scale)."""
-    add_box(slide, ox + root_x * scale, oy + root_y * scale, NODE_W * scale, NODE_H * scale, root, scale)
+    box_x = ox + root_x * scale
+    box_y = oy + root_y * scale
+    add_box(slide, box_x, box_y, NODE_W * scale, NODE_H * scale, root, scale)
+    if root.reports_to:
+        add_continuation_tag(slide, box_x, box_y, NODE_W * scale, root.reports_to, scale)
     if children_subset:
         px = ox + (root_x + NODE_W / 2) * scale
         pbottom = oy + (root_y + NODE_H) * scale
         bus_y = oy + (root_y + NODE_H + VGAP / 2) * scale
         add_line(slide, px, pbottom, px, bus_y)
-        first_cx = ox + (children_subset[0].x + NODE_W / 2) * scale
-        last_cx = ox + (children_subset[-1].x + NODE_W / 2) * scale
-        if len(children_subset) > 1:
-            add_line(slide, first_cx, bus_y, last_cx, bus_y)
-        for c in children_subset:
-            ccx = ox + (c.x + NODE_W / 2) * scale
+        child_centers = [ox + (c.x + NODE_W / 2) * scale for c in children_subset]
+        left_x = min(child_centers + [px])
+        right_x = max(child_centers + [px])
+        if left_x != right_x:
+            add_line(slide, left_x, bus_y, right_x, bus_y)
+        for c, ccx in zip(children_subset, child_centers):
             ctop = oy + c.y * scale
             add_line(slide, ccx, bus_y, ccx, ctop)
             draw_tree_at(slide, c, ox, oy, scale)
@@ -420,11 +482,18 @@ def render_department(prs, dept_title, roots):
         actual_w = max_x - min_x
         actual_h = max_y - min_y
 
+        # Pages with a continuation tag (a promoted node repeated without
+        # its real manager) need a little extra headroom for the dashed
+        # stub + "reports to" caption above the top row of boxes.
+        needs_tag_room = any(root.reports_to for root, _ in page_blocks)
+        page_top = TOP + (0.3 if needs_tag_room else 0.0)
+        page_usable_h = SLIDE_H - page_top - BOTTOM
+
         fit_scale = min(1.0, USABLE_W / actual_w if actual_w > 0 else 1.0,
-                         USABLE_H / actual_h if actual_h > 0 else 1.0)
+                         page_usable_h / actual_h if actual_h > 0 else 1.0)
 
         ox = LEFT_MARGIN + max(0, (USABLE_W - actual_w * fit_scale) / 2) - min_x * fit_scale
-        oy = TOP + max(0, (USABLE_H - actual_h * fit_scale) / 2) - min_y * fit_scale
+        oy = page_top + max(0, (page_usable_h - actual_h * fit_scale) / 2) - min_y * fit_scale
 
         for (root, subset), (root_x, root_y) in zip(page_blocks, root_positions):
             draw_block_at(slide, root, subset, root_x, root_y, ox, oy, fit_scale)
