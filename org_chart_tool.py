@@ -53,7 +53,7 @@ TOP, BOTTOM = 1.25, 0.4
 USABLE_W = SLIDE_W - LEFT_MARGIN - RIGHT_MARGIN
 USABLE_H = SLIDE_H - TOP - BOTTOM
 
-NODE_W, NODE_H = 1.7, 0.90
+NODE_W, NODE_H = 1.7, 1.0
 HGAP, VGAP = 0.25, 0.5
 BLOCK_GAP = 0.45   # gap between independent blocks placed side by side on a page
 
