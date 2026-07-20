@@ -430,11 +430,11 @@ def draw_block_at(slide, root, children_subset, root_x, root_y, ox, oy, scale):
 
 BANNER_RED = "E63950"
 FOOTER_NAVY = NAVY
-BANNER_H = 0.85
-BANNER_CUT = 0.6
-FOOTER_H = 0.32
+BANNER_H = 0.80
+BANNER_CUT = 0.5
+FOOTER_H = 0.25
 FOOTER_CUT = 0.5
-FOOTER_TAB_W = 1.05
+FOOTER_TAB_W = .50
 
 _FREEFORM_UNIT = Inches(1) / 1000  # 1000 local units per inch, for sub-integer precision
 
