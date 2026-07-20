@@ -428,8 +428,8 @@ def draw_block_at(slide, root, children_subset, root_x, root_y, ox, oy, scale):
             draw_tree_at(slide, c, ox, oy, scale)
 
 
-BANNER_RED = "E63950"
-FOOTER_NAVY = NAVY
+BANNER_RED = ""
+FOOTER_NAVY = 
 BANNER_H = 0.80
 BANNER_CUT = 0.5
 FOOTER_H = 0.25
@@ -468,7 +468,7 @@ def add_title(slide, text):
         (0, BANNER_H),
     ], fill_hex=BANNER_RED)
 
-    tb = slide.shapes.add_textbox(Inches(0.35), Inches(0), Inches(top_w - BANNER_CUT - 0.35), Inches(BANNER_H))
+    tb = slide.shapes.add_textbox(Inches(0.35), Inches(0), Inches(top_w - BANNER_CUT - 0.25), Inches(BANNER_H))
     tf = tb.text_frame
     tf.vertical_anchor = MSO_ANCHOR.MIDDLE
     tf.word_wrap = False
@@ -494,7 +494,7 @@ def add_footer(slide, page_no, company_name):
         (SLIDE_W - FOOTER_TAB_W - FOOTER_CUT, SLIDE_H),
     ], fill_hex=BANNER_RED)
 
-    tb = slide.shapes.add_textbox(Inches(0.35), Inches(SLIDE_H - FOOTER_H),
+    tb = slide.shapes.add_textbox(Inches(0.20), Inches(SLIDE_H - FOOTER_H),
                                    Inches(SLIDE_W - FOOTER_TAB_W - FOOTER_CUT - 0.7), Inches(FOOTER_H))
     tf = tb.text_frame
     tf.vertical_anchor = MSO_ANCHOR.MIDDLE
