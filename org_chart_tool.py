@@ -429,7 +429,7 @@ def draw_block_at(slide, root, children_subset, root_x, root_y, ox, oy, scale):
 
 
 BANNER_RED = "E63950"
-FOOTER_NAVY = NAVY
+FOOTER_White = White
 BANNER_H = 0.75
 BANNER_CUT = 0.5
 FOOTER_H = 0.25
