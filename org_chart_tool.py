@@ -51,7 +51,7 @@ BODY_TEXT = "222222"      # title/department text under the name
 CARD_FILL = "F5F8FB"      # soft light fill for each card
 CONNECTOR_BLUE = "6FA8C9" # connector line color
 SHADOW_TINT = "347490"    # backing "stacked card" shape behind each box
-SHADOW_OFFSET = 0.06      # inches, how far the shadow card peeks out
+SHADOW_OFFSET = 0.13      # inches, how far the shadow card peeks out
 CARD_CUT = 0.18           # inches, depth of the top-right/bottom-left corner cuts
 
 SLIDE_W, SLIDE_H = 13.333, 7.5
@@ -460,10 +460,7 @@ def add_title(slide, text):
     tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
     p = tf.paragraphs[0]
     r = p.add_run()
-    set_run(r, text, 20, True, NAVY)
-
-
-
+    set_run(r, text, 20, True, "FFFFFF")
 
 
 def render_department(prs, dept_title, roots):
