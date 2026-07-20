@@ -50,8 +50,8 @@ LINK_BLUE = "1F77C4"      # name text color, matching the hyperlink look in the 
 BODY_TEXT = "222222"      # title/department text under the name
 CARD_FILL = "F5F8FB"      # soft light fill for each card
 CONNECTOR_BLUE = "6FA8C9" # connector line color
-SHADOW_TINT = "0C3649"    # backing "stacked card" shape behind each box
-SHADOW_OFFSET = 0.11      # inches, how far the shadow card peeks out
+SHADOW_TINT = "347490"    # backing "stacked card" shape behind each box
+SHADOW_OFFSET = 0.06      # inches, how far the shadow card peeks out
 CARD_CUT = 0.18           # inches, depth of the top-right/bottom-left corner cuts
 
 SLIDE_W, SLIDE_H = 13.333, 7.5
@@ -428,14 +428,6 @@ def draw_block_at(slide, root, children_subset, root_x, root_y, ox, oy, scale):
             draw_tree_at(slide, c, ox, oy, scale)
 
 
-BANNER_RED = "E63950"
-FOOTER_NAVY = NAVY
-BANNER_H = 0.75
-BANNER_CUT = 0.5
-FOOTER_H = 0.25
-FOOTER_CUT = 0.5
-FOOTER_TAB_W = .25
-
 _FREEFORM_UNIT = Inches(1) / 1000  # 1000 local units per inch, for sub-integer precision
 
 
@@ -459,59 +451,19 @@ def add_polygon(slide, points_in, fill_hex=None, line_hex=None):
 
 
 def add_title(slide, text):
-    """Red diagonal-cut ribbon banner with the slide title, matching the reference deck."""
-    top_w = min(6.6, 1.5 + 0.17 * len(text))
-    add_polygon(slide, [
-        (0, 0),
-        (top_w, 0),
-        (top_w - BANNER_CUT, BANNER_H),
-        (0, BANNER_H),
-    ], fill_hex=BANNER_RED)
-
-    tb = slide.shapes.add_textbox(Inches(0.35), Inches(0), Inches(top_w - BANNER_CUT - 0.25), Inches(BANNER_H))
+    """Plain slide title text, no banner background."""
+    tb = slide.shapes.add_textbox(Inches(LEFT_MARGIN), Inches(0.25),
+                                   Inches(SLIDE_W - LEFT_MARGIN - RIGHT_MARGIN), Inches(0.6))
     tf = tb.text_frame
     tf.vertical_anchor = MSO_ANCHOR.MIDDLE
     tf.word_wrap = False
-    tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE  # shrink font if a title still runs long
-    p = tf.paragraphs[0]
-    r = p.add_run()
-    set_run(r, text, 20, True, "FFFFFF")
-
-
-def add_footer(slide, page_no, company_name):
-    """Dark footer bar with a red page-number tab, matching the reference deck."""
-    add_polygon(slide, [
-        (0, SLIDE_H - FOOTER_H),
-        (SLIDE_W - FOOTER_TAB_W, SLIDE_H - FOOTER_H),
-        (SLIDE_W - FOOTER_TAB_W - FOOTER_CUT, SLIDE_H),
-        (0, SLIDE_H),
-    ], fill_hex=FOOTER_NAVY)
-
-    add_polygon(slide, [
-        (SLIDE_W - FOOTER_TAB_W, SLIDE_H - FOOTER_H),
-        (SLIDE_W, SLIDE_H - FOOTER_H),
-        (SLIDE_W, SLIDE_H),
-        (SLIDE_W - FOOTER_TAB_W - FOOTER_CUT, SLIDE_H),
-    ], fill_hex=BANNER_RED)
-
-    tb = slide.shapes.add_textbox(Inches(0.20), Inches(SLIDE_H - FOOTER_H),
-                                   Inches(SLIDE_W - FOOTER_TAB_W - FOOTER_CUT - 0.7), Inches(FOOTER_H))
-    tf = tb.text_frame
-    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
     tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
     p = tf.paragraphs[0]
-    p.alignment = PP_ALIGN.RIGHT
     r = p.add_run()
-    set_run(r, f"\u00a9 Copyright {datetime.date.today().year} {company_name} All Rights Reserved", 8.5, False, "FFFFFF")
+    set_run(r, text, 20, True, NAVY)
 
-    tb2 = slide.shapes.add_textbox(Inches(SLIDE_W - FOOTER_TAB_W), Inches(SLIDE_H - FOOTER_H),
-                                    Inches(FOOTER_TAB_W), Inches(FOOTER_H))
-    tf2 = tb2.text_frame
-    tf2.vertical_anchor = MSO_ANCHOR.MIDDLE
-    p2 = tf2.text_frame.paragraphs[0] if False else tf2.paragraphs[0]
-    p2.alignment = PP_ALIGN.CENTER
-    r2 = p2.add_run()
-    set_run(r2, str(page_no), 10, True, "FFFFFF")
+
+
 
 
 def render_department(prs, dept_title, roots):
@@ -641,24 +593,6 @@ def add_disclaimer_slide(prs):
         r = p.add_run()
         set_run(r, "\u2022  " + line, 13, False, "333333")
 
-    legend_y = 5.55
-    lbl = slide.shapes.add_textbox(Inches(LEFT_MARGIN), Inches(legend_y - 0.4), Inches(5), Inches(0.35))
-    r = lbl.text_frame.paragraphs[0].add_run()
-    set_run(r, "Box border color denotes hierarchy level:", 13, True, "333333")
-
-    labels = ["Level 1", "Level 2", "Level 3", "Level 4"]
-    swatch_w, gap = 1.9, 0.25
-    x = LEFT_MARGIN
-    for lab, color in zip(labels, LEVEL_COLORS):
-        shp = add_polygon(slide, _card_points(x, legend_y, swatch_w, 0.5, CARD_CUT),
-                           fill_hex=CARD_FILL, line_hex=color)
-        shp.line.width = Pt(1.5)
-        p = shp.text_frame.paragraphs[0]
-        p.alignment = PP_ALIGN.CENTER
-        rr = p.add_run()
-        set_run(rr, lab, 11, True, color)
-        x += swatch_w + gap
-
 
 def build(input_path, output_path, company_name):
     wb = openpyxl.load_workbook(input_path, data_only=True)
@@ -677,11 +611,6 @@ def build(input_path, output_path, company_name):
         render_department(prs, ws.title, roots)
         total_boxes += len(emps)
         print(f"  {ws.title}: {len(emps)} employees, {len(roots)} top-level box(es)")
-
-    for i, slide in enumerate(prs.slides, start=1):
-        if i <= 1:
-            continue
-        add_footer(slide, i, company_name)
 
     prs.save(output_path)
     print(f"\nTotal employees plotted : {total_boxes}")
