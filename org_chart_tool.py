@@ -50,7 +50,7 @@ LINK_BLUE = "1F77C4"      # name text color, matching the hyperlink look in the 
 BODY_TEXT = "222222"      # title/department text under the name
 CARD_FILL = "F5F8FB"      # soft light fill for each card
 CONNECTOR_BLUE = "6FA8C9" # connector line color
-SHADOW_TINT = "8FA9BB"    # backing "stacked card" shape behind each box
+SHADOW_TINT = "0C3649"    # backing "stacked card" shape behind each box
 SHADOW_OFFSET = 0.11      # inches, how far the shadow card peeks out
 CARD_CUT = 0.18           # inches, depth of the top-right/bottom-left corner cuts
 
@@ -429,7 +429,7 @@ def draw_block_at(slide, root, children_subset, root_x, root_y, ox, oy, scale):
 
 
 BANNER_RED = "E63950"
-FOOTER_White = White
+FOOTER_NAVY = NAVY
 BANNER_H = 0.75
 BANNER_CUT = 0.5
 FOOTER_H = 0.25
