@@ -39,13 +39,20 @@ from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE, MSO_CONNECTOR
-from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+from pptx.enum.text import PP_ALIGN, MSO_ANCHOR, MSO_AUTO_SIZE
 from pptx.enum.dml import MSO_LINE_DASH_STYLE
 
 LEVEL_COLORS = ["0C3649", "347490", "4396BB", "70AFCC"]
 LINE_GRAY = "9AA5AB"
 NAVY = "0C3649"
 GRAY_TEXT = "555555"
+LINK_BLUE = "1F77C4"      # name text color, matching the hyperlink look in the reference
+BODY_TEXT = "222222"      # title/department text under the name
+CARD_FILL = "F5F8FB"      # soft light fill for each card
+CONNECTOR_BLUE = "6FA8C9" # connector line color
+SHADOW_TINT = "8FA9BB"    # backing "stacked card" shape behind each box
+SHADOW_OFFSET = 0.06      # inches, how far the shadow card peeks out
+CARD_CUT = 0.18           # inches, depth of the top-right/bottom-left corner cuts
 
 SLIDE_W, SLIDE_H = 13.333, 7.5
 LEFT_MARGIN, RIGHT_MARGIN = 0.45, 0.45
@@ -54,8 +61,8 @@ USABLE_W = SLIDE_W - LEFT_MARGIN - RIGHT_MARGIN
 USABLE_H = SLIDE_H - TOP - BOTTOM
 
 NODE_W, NODE_H = 1.7, 1.0
-HGAP, VGAP = 0.25, 0.5
-BLOCK_GAP = 0.45   # gap between independent blocks placed side by side on a page
+HGAP, VGAP = 0.32, 0.62
+BLOCK_GAP = 0.5   # gap between independent blocks placed side by side on a page
 
 FONT = "Arial"
 
@@ -277,34 +284,52 @@ def set_run(run, text, size, bold, color_hex, font=FONT):
     run.font.color.rgb = RGBColor.from_string(color_hex)
 
 
+def _card_points(x, y, w, h, cut):
+    """Six points outlining a rectangle with its top-right and bottom-left
+    corners cut off diagonally."""
+    return [
+        (x, y),
+        (x + w - cut, y),
+        (x + w, y + cut),
+        (x + w, y + h),
+        (x + cut, y + h),
+        (x, y + h - cut),
+    ]
+
+
 def add_box(slide, x, y, w, h, e, scale=1.0):
-    shp = slide.shapes.add_shape(MSO_SHAPE.SNIP_2_DIAG_RECTANGLE,
-                                  Inches(x), Inches(y), Inches(w), Inches(h))
-    shp.fill.solid()
-    shp.fill.fore_color.rgb = RGBColor.from_string("FFFFFF")
     border_color = LEVEL_COLORS[min(e.level - 1, len(LEVEL_COLORS) - 1)]
-    shp.line.color.rgb = RGBColor.from_string(border_color)
+    cut = CARD_CUT * scale
+
+    # Backing "shadow" card: a slightly offset, darker copy of the same
+    # cut-corner shape behind the main card, peeking out on the top-left,
+    # giving the stacked/3D look from the reference screenshot.
+    off = SHADOW_OFFSET * scale
+    shadow = add_polygon(slide, _card_points(x - off, y - off, w, h, cut), fill_hex=SHADOW_TINT)
+
+    shp = add_polygon(slide, _card_points(x, y, w, h, cut), fill_hex=CARD_FILL, line_hex=border_color)
     shp.line.width = Pt(1.0)
-    shp.shadow.inherit = False
 
     tf = shp.text_frame
     tf.word_wrap = True
-    tf.margin_left = Inches(0.05)
-    tf.margin_right = Inches(0.05)
-    tf.margin_top = Inches(0.02)
-    tf.margin_bottom = Inches(0.02)
+    tf.margin_left = Inches(0.08)
+    tf.margin_right = Inches(0.08)
+    tf.margin_top = Inches(0.04)
+    tf.margin_bottom = Inches(0.04)
     tf.vertical_anchor = MSO_ANCHOR.MIDDLE
 
-    name_size = max(7.0, 9.5 * scale)
-    title_size = max(6.0, 8 * scale)
+    name_size = max(8.5, 11.5 * scale)
+    title_size = max(7.5, 9.5 * scale)
 
     p1 = tf.paragraphs[0]
     p1.alignment = PP_ALIGN.CENTER
     r1 = p1.add_run()
-    set_run(r1, e.name, name_size, True, border_color)
+    # Names are always styled like the reference's hyperlink look (blue,
+    # underlined); only names with a real LinkedIn URL get an actual link.
+    set_run(r1, e.name, name_size, True, LINK_BLUE)
+    r1.font.underline = True
     if e.linkedin:
         r1.hyperlink.address = e.linkedin
-        r1.font.underline = True
 
     subtitle = e.title
     if e.dept and e.dept.lower() not in (e.title or "").lower():
@@ -313,10 +338,10 @@ def add_box(slide, x, y, w, h, e, scale=1.0):
         p2 = tf.add_paragraph()
         p2.alignment = PP_ALIGN.CENTER
         r2 = p2.add_run()
-        set_run(r2, subtitle, title_size, False, GRAY_TEXT)
+        set_run(r2, subtitle, title_size, False, BODY_TEXT)
 
 
-def add_line(slide, x1, y1, x2, y2, color=LINE_GRAY, weight=1.0):
+def add_line(slide, x1, y1, x2, y2, color=CONNECTOR_BLUE, weight=1.0):
     conn = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT,
                                        Inches(x1), Inches(y1), Inches(x2), Inches(y2))
     conn.line.color.rgb = RGBColor.from_string(color)
@@ -403,26 +428,90 @@ def draw_block_at(slide, root, children_subset, root_x, root_y, ox, oy, scale):
             draw_tree_at(slide, c, ox, oy, scale)
 
 
+BANNER_RED = "E63950"
+FOOTER_NAVY = NAVY
+BANNER_H = 0.85
+BANNER_CUT = 0.6
+FOOTER_H = 0.32
+FOOTER_CUT = 0.5
+FOOTER_TAB_W = 1.05
+
+_FREEFORM_UNIT = Inches(1) / 1000  # 1000 local units per inch, for sub-integer precision
+
+
+def add_polygon(slide, points_in, fill_hex=None, line_hex=None):
+    """Draw a closed polygon from a list of (x, y) points given in inches."""
+    pts = [(round(x * 1000), round(y * 1000)) for x, y in points_in]
+    fb = slide.shapes.build_freeform(pts[0][0], pts[0][1], scale=_FREEFORM_UNIT)
+    fb.add_line_segments(pts[1:], close=True)
+    shape = fb.convert_to_shape(0, 0)
+    if fill_hex:
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = RGBColor.from_string(fill_hex)
+    else:
+        shape.fill.background()
+    if line_hex:
+        shape.line.color.rgb = RGBColor.from_string(line_hex)
+    else:
+        shape.line.fill.background()
+    shape.shadow.inherit = False
+    return shape
+
+
 def add_title(slide, text):
-    tb = slide.shapes.add_textbox(Inches(LEFT_MARGIN), Inches(0.32),
-                                   Inches(SLIDE_W - LEFT_MARGIN - RIGHT_MARGIN), Inches(0.65))
-    p = tb.text_frame.paragraphs[0]
+    """Red diagonal-cut ribbon banner with the slide title, matching the reference deck."""
+    top_w = min(6.6, 1.5 + 0.17 * len(text))
+    add_polygon(slide, [
+        (0, 0),
+        (top_w, 0),
+        (top_w - BANNER_CUT, BANNER_H),
+        (0, BANNER_H),
+    ], fill_hex=BANNER_RED)
+
+    tb = slide.shapes.add_textbox(Inches(0.35), Inches(0), Inches(top_w - BANNER_CUT - 0.35), Inches(BANNER_H))
+    tf = tb.text_frame
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    tf.word_wrap = False
+    tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE  # shrink font if a title still runs long
+    p = tf.paragraphs[0]
     r = p.add_run()
-    set_run(r, text, 22, True, NAVY)
-    line = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT,
-                                       Inches(LEFT_MARGIN), Inches(1.05),
-                                       Inches(SLIDE_W - RIGHT_MARGIN), Inches(1.05))
-    line.line.color.rgb = RGBColor.from_string("D8DEE1")
-    line.line.width = Pt(1.0)
+    set_run(r, text, 20, True, "FFFFFF")
 
 
-def add_page_number(slide, page_no):
-    tb = slide.shapes.add_textbox(Inches(SLIDE_W - 1.2), Inches(SLIDE_H - 0.42),
-                                   Inches(0.9), Inches(0.3))
-    p = tb.text_frame.paragraphs[0]
+def add_footer(slide, page_no, company_name):
+    """Dark footer bar with a red page-number tab, matching the reference deck."""
+    add_polygon(slide, [
+        (0, SLIDE_H - FOOTER_H),
+        (SLIDE_W - FOOTER_TAB_W, SLIDE_H - FOOTER_H),
+        (SLIDE_W - FOOTER_TAB_W - FOOTER_CUT, SLIDE_H),
+        (0, SLIDE_H),
+    ], fill_hex=FOOTER_NAVY)
+
+    add_polygon(slide, [
+        (SLIDE_W - FOOTER_TAB_W, SLIDE_H - FOOTER_H),
+        (SLIDE_W, SLIDE_H - FOOTER_H),
+        (SLIDE_W, SLIDE_H),
+        (SLIDE_W - FOOTER_TAB_W - FOOTER_CUT, SLIDE_H),
+    ], fill_hex=BANNER_RED)
+
+    tb = slide.shapes.add_textbox(Inches(0.35), Inches(SLIDE_H - FOOTER_H),
+                                   Inches(SLIDE_W - FOOTER_TAB_W - FOOTER_CUT - 0.7), Inches(FOOTER_H))
+    tf = tb.text_frame
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+    p = tf.paragraphs[0]
     p.alignment = PP_ALIGN.RIGHT
     r = p.add_run()
-    set_run(r, str(page_no), 10, False, "8A8A8A")
+    set_run(r, f"\u00a9 Copyright {datetime.date.today().year} {company_name} All Rights Reserved", 8.5, False, "FFFFFF")
+
+    tb2 = slide.shapes.add_textbox(Inches(SLIDE_W - FOOTER_TAB_W), Inches(SLIDE_H - FOOTER_H),
+                                    Inches(FOOTER_TAB_W), Inches(FOOTER_H))
+    tf2 = tb2.text_frame
+    tf2.vertical_anchor = MSO_ANCHOR.MIDDLE
+    p2 = tf2.text_frame.paragraphs[0] if False else tf2.paragraphs[0]
+    p2.alignment = PP_ALIGN.CENTER
+    r2 = p2.add_run()
+    set_run(r2, str(page_no), 10, True, "FFFFFF")
 
 
 def render_department(prs, dept_title, roots):
@@ -561,13 +650,9 @@ def add_disclaimer_slide(prs):
     swatch_w, gap = 1.9, 0.25
     x = LEFT_MARGIN
     for lab, color in zip(labels, LEVEL_COLORS):
-        shp = slide.shapes.add_shape(MSO_SHAPE.SNIP_2_DIAG_RECTANGLE,
-                                      Inches(x), Inches(legend_y), Inches(swatch_w), Inches(0.5))
-        shp.fill.solid()
-        shp.fill.fore_color.rgb = RGBColor.from_string("FFFFFF")
-        shp.line.color.rgb = RGBColor.from_string(color)
+        shp = add_polygon(slide, _card_points(x, legend_y, swatch_w, 0.5, CARD_CUT),
+                           fill_hex=CARD_FILL, line_hex=color)
         shp.line.width = Pt(1.5)
-        shp.shadow.inherit = False
         p = shp.text_frame.paragraphs[0]
         p.alignment = PP_ALIGN.CENTER
         rr = p.add_run()
@@ -594,9 +679,9 @@ def build(input_path, output_path, company_name):
         print(f"  {ws.title}: {len(emps)} employees, {len(roots)} top-level box(es)")
 
     for i, slide in enumerate(prs.slides, start=1):
-        if i <= 2:
+        if i <= 1:
             continue
-        add_page_number(slide, i)
+        add_footer(slide, i, company_name)
 
     prs.save(output_path)
     print(f"\nTotal employees plotted : {total_boxes}")
