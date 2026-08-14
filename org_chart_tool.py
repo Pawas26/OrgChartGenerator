@@ -17,11 +17,15 @@ USAGE
 REQUIRED EXCEL COLUMNS (per sheet)
 ----------------------------------
     Name            - employee full name
-    Designation     - job title
-    Department      - sub-department / region label shown next to the title
     ReportsToName   - the Name of this person's manager, WITHIN THE SAME
                       SHEET. Blank / not found in the sheet => top-level
                       box for that department.
+
+OPTIONAL EXCEL COLUMNS (per sheet)
+-----------------------------------
+    Designation     - job title, shown on each box if present
+    Department      - sub-department / region label shown next to the title
+    LinkedinUrl     - if present and not blank/"NA", the name is hyperlinked
 
 Any other columns in the workbook are ignored. Nothing in the source
 workbook is read via formulas (values only), and the workbook is never
@@ -48,10 +52,10 @@ NAVY = "0C3649"
 GRAY_TEXT = "555555"
 LINK_BLUE = "1F77C4"      # name text color, matching the hyperlink look in the reference
 BODY_TEXT = "222222"      # title/department text under the name
-CARD_FILL = "F5F8FB"      # soft light fill for each card
+CARD_FILL = "F5F8FB"      # soft light fill for the foreground (text-bearing) card
 CONNECTOR_BLUE = "6FA8C9" # connector line color
-SHADOW_TINT = "347490"    # backing "stacked card" shape behind each box
-SHADOW_OFFSET = 0.13      # inches, how far the shadow card peeks out
+SHADOW_TINT = "8FA9BB"    # fallback backing-card tint (unused now that it takes the level color)
+SHADOW_OFFSET = 0.10      # inches, how far the shadow card peeks out
 CARD_CUT = 0.18           # inches, depth of the top-right/bottom-left corner cuts
 
 SLIDE_W, SLIDE_H = 13.333, 7.5
@@ -63,13 +67,14 @@ USABLE_H = SLIDE_H - TOP - BOTTOM
 NODE_W, NODE_H = 1.7, 1.0
 HGAP, VGAP = 0.32, 0.62
 BLOCK_GAP = 0.5   # gap between independent blocks placed side by side on a page
+TOP_CONNECTOR_STUB = 0.28  # inches, stub length for the top-level "same rank" connector
 
 FONT = "Arial"
 
 
 class Emp:
     __slots__ = ("name", "title", "dept", "reports_to", "children", "level",
-                 "x", "y", "subtree_w", "subtree_h", "linkedin")
+                 "x", "y", "subtree_w", "subtree_h", "linkedin", "parent")
 
     def __init__(self, name, title, dept, reports_to, linkedin=None):
         self.name = name
@@ -83,6 +88,8 @@ class Emp:
         self.subtree_w = NODE_W
         self.subtree_h = NODE_H
         self.linkedin = linkedin
+        self.parent = None  # stable reference, set once in read_department; unaffected
+                             # by prepare() later cropping .children for pagination
 
 
 REQUIRED_COLS = ("Name", "ReportsToName")
@@ -132,6 +139,7 @@ def read_department(ws):
         parent = by_name.get(e.reports_to) if e.reports_to else None
         if parent is not None and parent is not e:
             parent.children.append(e)
+            e.parent = parent
         else:
             roots.append(e)
 
@@ -226,7 +234,7 @@ def prepare(node, budget):
         node.subtree_h = NODE_H + VGAP + max(c.subtree_h for c in node.children)
         return extra
 
-    groups = pack_into_groups(node.children, budget - NODE_W, HGAP)
+    groups = pack_into_groups(node.children, budget, HGAP)
     node.children = groups[0]
     node.subtree_w = block_width(node.children)
     node.subtree_h = NODE_H + VGAP + max(c.subtree_h for c in node.children)
@@ -237,19 +245,31 @@ def prepare(node, budget):
 
 def build_blocks(root):
     extra = prepare(root, USABLE_W)
-    return [(root, list(root.children))] + extra
+    blocks = [(root, list(root.children), [])]
+    for node, subset in extra:
+        blocks.append((node, subset, ancestor_chain(node)))
+    return blocks
+
+
+def ancestor_chain(node):
+    """This node's ancestors from the department's top-level root down to
+    (but not including) node itself, via the stable .parent reference
+    (unaffected by prepare()'s later cropping of .children). Used so a
+    continuation block can redraw the full reporting line above a
+    promoted node instead of just naming its manager in a caption."""
+    chain = []
+    p = node.parent
+    while p is not None:
+        chain.append(p)
+        p = p.parent
+    chain.reverse()
+    return chain
 
 
 def block_width(children_subset):
     if not children_subset:
         return NODE_W
     return sum(c.subtree_w for c in children_subset) + HGAP * (len(children_subset) - 1)
-
-
-def block_height(root, children_subset):
-    if not children_subset:
-        return NODE_H
-    return NODE_H + VGAP + max(c.subtree_h for c in children_subset)
 
 
 def layout_block(root, children_subset, x, root_y=0.0):
@@ -298,22 +318,23 @@ def _card_points(x, y, w, h, cut):
 
 
 def add_box(slide, x, y, w, h, e, scale=1.0):
-    border_color = LEVEL_COLORS[min(e.level - 1, len(LEVEL_COLORS) - 1)]
+    level_color = LEVEL_COLORS[min(e.level - 1, len(LEVEL_COLORS) - 1)]
     cut = CARD_CUT * scale
 
-    # Backing "shadow" card: a slightly offset, darker copy of the same
-    # cut-corner shape behind the main card, peeking out on the top-left,
-    # giving the stacked/3D look from the reference screenshot.
+    # Backing card: a slightly offset copy of the same cut-corner shape
+    # behind the main card, peeking out on the top-left. This one carries
+    # the solid hierarchy-level color; the foreground card stays light so
+    # the name/title text is easy to read.
     off = SHADOW_OFFSET * scale
-    shadow = add_polygon(slide, _card_points(x - off, y - off, w, h, cut), fill_hex=SHADOW_TINT)
+    shadow = add_polygon(slide, _card_points(x - off, y - off, w, h, cut), fill_hex=level_color)
 
-    shp = add_polygon(slide, _card_points(x, y, w, h, cut), fill_hex=CARD_FILL, line_hex=border_color)
+    shp = add_polygon(slide, _card_points(x, y, w, h, cut), fill_hex=CARD_FILL, line_hex=level_color)
     shp.line.width = Pt(1.0)
 
     tf = shp.text_frame
     tf.word_wrap = True
-    tf.margin_left = Inches(0.08)
-    tf.margin_right = Inches(0.08)
+    tf.margin_left = Inches(0.1)
+    tf.margin_right = Inches(0.1)
     tf.margin_top = Inches(0.04)
     tf.margin_bottom = Inches(0.04)
     tf.vertical_anchor = MSO_ANCHOR.MIDDLE
@@ -324,8 +345,8 @@ def add_box(slide, x, y, w, h, e, scale=1.0):
     p1 = tf.paragraphs[0]
     p1.alignment = PP_ALIGN.CENTER
     r1 = p1.add_run()
-    # Names are always styled like the reference's hyperlink look (blue,
-    # underlined); only names with a real LinkedIn URL get an actual link.
+    # Names keep the hyperlink look: colored and underlined. Only names
+    # with a real LinkedIn URL get an actual clickable link.
     set_run(r1, e.name, name_size, True, LINK_BLUE)
     r1.font.underline = True
     if e.linkedin:
@@ -405,13 +426,32 @@ def add_continuation_tag(slide, x, y, w, manager_name, scale):
         run.font.italic = True
 
 
-def draw_block_at(slide, root, children_subset, root_x, root_y, ox, oy, scale):
+def draw_block_at(slide, node, children_subset, chain, root_x, root_y, ox, oy, scale):
     """Draw a block using positions already computed by layout_block, transformed by (ox, oy, scale)."""
+    step = NODE_H + VGAP
+    chain_len = len(chain)
+    cx_screen = ox + (root_x + NODE_W / 2) * scale
+    prev_bottom = None
+    for i, anc in enumerate(chain):
+        by = root_y - (chain_len - i) * step
+        bx = ox + root_x * scale
+        by_screen = oy + by * scale
+        add_box(slide, bx, by_screen, NODE_W * scale, NODE_H * scale, anc, scale)
+        if prev_bottom is not None:
+            add_line(slide, cx_screen, prev_bottom, cx_screen, by_screen)
+        prev_bottom = by_screen + NODE_H * scale
+    if chain_len:
+        node_top = oy + root_y * scale
+        add_line(slide, cx_screen, prev_bottom, cx_screen, node_top)
+
     box_x = ox + root_x * scale
     box_y = oy + root_y * scale
-    add_box(slide, box_x, box_y, NODE_W * scale, NODE_H * scale, root, scale)
-    if root.reports_to:
-        add_continuation_tag(slide, box_x, box_y, NODE_W * scale, root.reports_to, scale)
+    add_box(slide, box_x, box_y, NODE_W * scale, NODE_H * scale, node, scale)
+    # Fallback: only when there's no resolvable chain (e.g. the person's
+    # manager isn't in this department's sheet at all) do we fall back to
+    # a text caption instead of real connected boxes.
+    if not chain and node.reports_to:
+        add_continuation_tag(slide, box_x, box_y, NODE_W * scale, node.reports_to, scale)
     if children_subset:
         px = ox + (root_x + NODE_W / 2) * scale
         pbottom = oy + (root_y + NODE_H) * scale
@@ -429,6 +469,16 @@ def draw_block_at(slide, root, children_subset, root_x, root_y, ox, oy, scale):
 
 
 _FREEFORM_UNIT = Inches(1) / 1000  # 1000 local units per inch, for sub-integer precision
+
+
+def get_blank_layout(prs):
+    """Find a layout named 'Blank' (case-insensitive); fall back to the
+    conventional index 6, which is 'Blank' in both python-pptx's default
+    template and a RefractOne-style --template deck."""
+    for layout in prs.slide_layouts:
+        if layout.name.strip().lower() == "blank":
+            return layout
+    return prs.slide_layouts[6]
 
 
 def add_polygon(slide, points_in, fill_hex=None, line_hex=None):
@@ -463,54 +513,89 @@ def add_title(slide, text):
     set_run(r, text, 20, True, "FFFFFF")
 
 
+
+
+
 def render_department(prs, dept_title, roots):
     # gather all blocks across all roots of this department
     blocks = []
     for root in roots:
         blocks.extend(build_blocks(root))
 
-    # pack blocks into pages (by width)
+    # pack blocks into pages (by width) -- chain length doesn't affect
+    # width, only height, so it doesn't change how many blocks fit per row
     pages, current, current_w = [], [], 0.0
-    for root, subset in blocks:
+    for node, subset, chain in blocks:
         w = block_width(subset)
         add = w if not current else BLOCK_GAP + w
         if current and current_w + add > USABLE_W:
             pages.append(current)
-            current, current_w = [(root, subset)], w
+            current, current_w = [(node, subset, chain)], w
         else:
-            current.append((root, subset))
+            current.append((node, subset, chain))
             current_w += add
     if current:
         pages.append(current)
 
+    # Safety net: if two continuation groups for the *same* node still end
+    # up sharing a page (rare once the budget above is right), merge them
+    # into one row instead of drawing that manager and their chain twice,
+    # side by side, on the same slide.
+    merged_pages = []
+    for page_blocks in pages:
+        merged = []
+        for node, subset, chain in page_blocks:
+            if merged and merged[-1][0] is node:
+                prev_node, prev_subset, prev_chain = merged[-1]
+                merged[-1] = (prev_node, prev_subset + subset, prev_chain)
+            else:
+                merged.append((node, subset, chain))
+        merged_pages.append(merged)
+    pages = merged_pages
+
     total_pages = len(pages)
+    step = NODE_H + VGAP
     for idx, page_blocks in enumerate(pages, start=1):
         label = f"{dept_title} ({idx}/{total_pages})" if total_pages > 1 else dept_title
-        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        slide = prs.slides.add_slide(get_blank_layout(prs))
         add_title(slide, label)
 
-        widths = [block_width(subset) for _, subset in page_blocks]
-        heights = [block_height(root, subset) for root, subset in page_blocks]
-        total_w = sum(widths) + BLOCK_GAP * (len(page_blocks) - 1)
-        max_h = max(heights) if heights else NODE_H
+        widths = [block_width(subset) for _, subset, _ in page_blocks]
 
         # First pass: compute every node's position at a provisional origin,
         # without drawing anything yet. Each block's root position is kept
         # in a local list (root objects can repeat across blocks when a
         # manager has too many direct reports, so we must not store the
         # position back on the shared object).
+        # If this page has more than one genuinely top-level executive
+        # (no manager at all within this department), join them with a
+        # connector across the top so they read as one chart rather than
+        # unrelated islands. Blocks that already carry their own ancestor
+        # chain, or the rare cross-department "reports to" tag, are left
+        # out -- they already have a clear place in the hierarchy.
+        top_level_idx = [i for i, (node, _, chain) in enumerate(page_blocks)
+                          if not chain and not node.reports_to]
+        draw_top_connector = len(top_level_idx) > 1
+
         cursor = 0.0
         root_positions = []
         all_bounds = []  # (x, y, w, h) rectangles, in provisional coordinates
-        for (root, subset), w in zip(page_blocks, widths):
-            root_x = layout_block(root, subset, cursor, root_y=0.0)
-            root_positions.append((root_x, 0.0))
-            all_bounds.append((root_x, 0.0, NODE_W, NODE_H))
+        for i, ((node, subset, chain), w) in enumerate(zip(page_blocks, widths)):
+            chain_len = len(chain)
+            root_y = chain_len * step
+            root_x = layout_block(node, subset, cursor, root_y=root_y)
+            root_positions.append((root_x, root_y))
+            all_bounds.append((root_x, root_y, NODE_W, NODE_H))
+            for ci in range(chain_len):
+                by = root_y - (chain_len - ci) * step
+                all_bounds.append((root_x, by, NODE_W, NODE_H))
+            if draw_top_connector and i in top_level_idx:
+                all_bounds.append((root_x, root_y - TOP_CONNECTOR_STUB, NODE_W, TOP_CONNECTOR_STUB))
             for c in subset:
                 nodes = []
                 flatten(c, nodes)
-                for node in nodes:
-                    all_bounds.append((node.x, node.y, NODE_W, NODE_H))
+                for nd in nodes:
+                    all_bounds.append((nd.x, nd.y, NODE_W, NODE_H))
             cursor += w + BLOCK_GAP
 
         min_x = min(bx for bx, by, bw, bh in all_bounds)
@@ -520,10 +605,9 @@ def render_department(prs, dept_title, roots):
         actual_w = max_x - min_x
         actual_h = max_y - min_y
 
-        # Pages with a continuation tag (a promoted node repeated without
-        # its real manager) need a little extra headroom for the dashed
-        # stub + "reports to" caption above the top row of boxes.
-        needs_tag_room = any(root.reports_to for root, _ in page_blocks)
+        # The rare fallback caption (manager not resolvable within this
+        # sheet at all) needs a little extra headroom above the top row.
+        needs_tag_room = any((not chain and node.reports_to) for node, _, chain in page_blocks)
         page_top = TOP + (0.3 if needs_tag_room else 0.0)
         page_usable_h = SLIDE_H - page_top - BOTTOM
 
@@ -533,12 +617,24 @@ def render_department(prs, dept_title, roots):
         ox = LEFT_MARGIN + max(0, (USABLE_W - actual_w * fit_scale) / 2) - min_x * fit_scale
         oy = page_top + max(0, (page_usable_h - actual_h * fit_scale) / 2) - min_y * fit_scale
 
-        for (root, subset), (root_x, root_y) in zip(page_blocks, root_positions):
-            draw_block_at(slide, root, subset, root_x, root_y, ox, oy, fit_scale)
+        for (node, subset, chain), (root_x, root_y) in zip(page_blocks, root_positions):
+            draw_block_at(slide, node, subset, chain, root_x, root_y, ox, oy, fit_scale)
+
+        if draw_top_connector:
+            stub = TOP_CONNECTOR_STUB * fit_scale
+            centers = []
+            for i in top_level_idx:
+                root_x, root_y = root_positions[i]
+                cx = ox + (root_x + NODE_W / 2) * fit_scale
+                top_y = oy + root_y * fit_scale
+                add_line(slide, cx, top_y - stub, cx, top_y)
+                centers.append(cx)
+            bus_y = oy - stub
+            add_line(slide, min(centers), bus_y, max(centers), bus_y)
 
 
 def add_title_slide(prs, company_name, subtitle="Organizational Chart"):
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide = prs.slides.add_slide(get_blank_layout(prs))
     bg = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, prs.slide_height)
     bg.fill.solid()
     bg.fill.fore_color.rgb = RGBColor.from_string(NAVY)
@@ -578,10 +674,10 @@ DISCLAIMER_LINES = [
 
 
 def add_disclaimer_slide(prs):
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide = prs.slides.add_slide(get_blank_layout(prs))
     add_title(slide, "Disclaimer")
     tb = slide.shapes.add_textbox(Inches(LEFT_MARGIN), Inches(1.5),
-                                   Inches(SLIDE_W - LEFT_MARGIN - RIGHT_MARGIN), Inches(3.4))
+                                   Inches(SLIDE_W - LEFT_MARGIN - RIGHT_MARGIN), Inches(3.2))
     tf = tb.text_frame
     tf.word_wrap = True
     for i, line in enumerate(DISCLAIMER_LINES):
@@ -590,14 +686,71 @@ def add_disclaimer_slide(prs):
         r = p.add_run()
         set_run(r, "\u2022  " + line, 13, False, "333333")
 
+    legend_lbl_y = 5.15
+    lbl = slide.shapes.add_textbox(Inches(LEFT_MARGIN), Inches(legend_lbl_y), Inches(8), Inches(0.35))
+    r = lbl.text_frame.paragraphs[0].add_run()
+    set_run(r, "Color legends for the organogram denote different levels as mentioned below:", 13, False, "333333")
 
-def build(input_path, output_path, company_name):
+    legend_y = legend_lbl_y + 0.45
+    labels = ["Level 1", "Level 2", "Level 3", "Level 4"]
+    swatch_w, swatch_h, gap = 1.5, 0.6, 0.15
+    x = LEFT_MARGIN
+    for lab, color in zip(labels, LEVEL_COLORS):
+        shp = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
+                                      Inches(x), Inches(legend_y), Inches(swatch_w), Inches(swatch_h))
+        shp.fill.solid()
+        shp.fill.fore_color.rgb = RGBColor.from_string(color)
+        shp.line.fill.background()
+        shp.shadow.inherit = False
+        p = shp.text_frame.paragraphs[0]
+        p.alignment = PP_ALIGN.CENTER
+        rr = p.add_run()
+        set_run(rr, lab, 12, False, "FFFFFF")
+        x += swatch_w + gap
+
+
+def find_and_replace_placeholder(slide, placeholder_text, replacement):
+    """Replace a shape's text (matched exactly, case-sensitive) with
+    `replacement`, preserving the first run's formatting."""
+    for shp in slide.shapes:
+        if shp.has_text_frame and shp.text_frame.text.strip() == placeholder_text:
+            p0 = shp.text_frame.paragraphs[0]
+            if p0.runs:
+                p0.runs[0].text = replacement
+                for r in p0.runs[1:]:
+                    r.text = ""
+                return True
+    return False
+
+
+def move_slide_to_end(prs, predicate):
+    """Move the first slide matching predicate(slide) -> bool to the end
+    of the deck. Returns True if a matching slide was found and moved."""
+    sldIdLst = prs.slides._sldIdLst
+    ids = list(sldIdLst)
+    for i, slide in enumerate(prs.slides):
+        if predicate(slide):
+            sldIdLst.remove(ids[i])
+            sldIdLst.append(ids[i])
+            return True
+    return False
+
+
+def build(input_path, output_path, company_name, template_path=None):
     wb = openpyxl.load_workbook(input_path, data_only=True)
-    prs = Presentation()
-    prs.slide_width = Inches(SLIDE_W)
-    prs.slide_height = Inches(SLIDE_H)
 
-    add_title_slide(prs, company_name)
+    if template_path:
+        prs = Presentation(template_path)
+        title_slide = prs.slides[0]
+        if not find_and_replace_placeholder(title_slide, "xxxx", company_name):
+            print("  Warning: couldn't find the 'xxxx' placeholder on the template's first "
+                  "slide -- it was left as-is.")
+    else:
+        prs = Presentation()
+        prs.slide_width = Inches(SLIDE_W)
+        prs.slide_height = Inches(SLIDE_H)
+        add_title_slide(prs, company_name)
+
     add_disclaimer_slide(prs)
 
     total_boxes = 0
@@ -608,6 +761,16 @@ def build(input_path, output_path, company_name):
         render_department(prs, ws.title, roots)
         total_boxes += len(emps)
         print(f"  {ws.title}: {len(emps)} employees, {len(roots)} top-level box(es)")
+
+    if template_path:
+        moved = move_slide_to_end(
+            prs,
+            lambda s: any(shp.has_text_frame and shp.text_frame.text.strip().lower() == "thank you"
+                          for shp in s.shapes),
+        )
+        if not moved:
+            print("  Warning: couldn't find a 'Thank You' closing slide in the template to move "
+                  "to the end -- slide order was left as generated.")
 
     prs.save(output_path)
     print(f"\nTotal employees plotted : {total_boxes}")
@@ -627,16 +790,22 @@ def main():
                          help="Path for the generated .pptx (default: <input name>_Org_Chart.pptx)")
     parser.add_argument("--company", default=None,
                          help="Company name shown on the title slide (default: derived from the input filename)")
+    parser.add_argument("--template", default=None,
+                         help="Path to a .pptx whose first slide (title) and a 'Thank You' closing "
+                              "slide should bookend the generated chart content. The first slide's "
+                              "'xxxx' placeholder text is replaced with --company.")
     args = parser.parse_args()
 
     if not os.path.isfile(args.input):
         raise SystemExit(f"Input file not found: {args.input}")
+    if args.template and not os.path.isfile(args.template):
+        raise SystemExit(f"Template file not found: {args.template}")
 
     output_path = args.output or (os.path.splitext(os.path.basename(args.input))[0] + "_Org_Chart.pptx")
     company_name = args.company or os.path.splitext(os.path.basename(args.input))[0].replace("_", " ")
 
     print(f"Reading workbook: {args.input}")
-    build(args.input, output_path, company_name)
+    build(args.input, output_path, company_name, template_path=args.template)
 
 
 if __name__ == "__main__":
